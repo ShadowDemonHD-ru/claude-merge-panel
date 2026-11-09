@@ -1,0 +1,11 @@
+{
+  "name": "merge-panel",
+  "version": "0.1.0",
+  "description": "A Merges pane for Claude Code: your open pull requests, their CI status, and a one-press Merge button, with a little orange companion",
+  "author": { "name": "ShadowDemonHD-ru" },
+  "homepage": "https://github.com/ShadowDemonHD-ru/claude-merge-panel",
+  "repository": "https://github.com/ShadowDemonHD-ru/claude-merge-panel",
+  "license": "MIT",
+  "keywords": ["mod", "pull-requests", "github", "merge", "ci", "pane"],
+  "types": "./types/index.d.ts"
+}

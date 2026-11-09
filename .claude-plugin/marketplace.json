@@ -1,0 +1,5 @@
+{
+  "name": "claude-merge-panel",
+  "owner": { "name": "ShadowDemonHD-ru" },
+  "plugins": [{ "name": "merge-panel", "source": "./", "description": "Open pull requests, CI status and one-press merge in a Claude Code pane" }]
+}
