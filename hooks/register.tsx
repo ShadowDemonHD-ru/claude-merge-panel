@@ -3,9 +3,9 @@
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import type { Activity, Pr } from '../types'
+import { isLang, LANGS, tr } from './i18n'
 
 const PANE = 'merge-panel'
-const TITLE = 'Merges'
 const REFRESH_MS = 60_000
 const MAX_PRS = 30
 
@@ -17,7 +17,8 @@ const URL_RE = /^https:\/\/github\.com\/[A-Za-z0-9-]{1,39}\/[A-Za-z0-9._-]{1,100
 
 const PRS = { plugin: 'merge-panel', key: 'prs' } as const
 const ACT = { plugin: 'merge-panel', key: 'activity' } as const
-const IDLE: Activity = { merging: null, note: '', syncedAt: 0, owners: [] }
+const IDLE: Activity = { merging: null, note: '', syncedAt: 0, owners: [], lang: 'en' }
+const LANG_KEY = 'lang'
 
 async function getPrs($: Engine): Promise<Pr[]> {
   return (await $.state.get(PRS)).value ?? []
@@ -66,7 +67,7 @@ async function owners($: Engine): Promise<string[]> {
 async function refresh($: Engine) {
   const who = await owners($)
   if (!who.length) {
-    await setAct($, { note: 'Could not reach GitHub: run `gh auth login` in a terminal, then press Refresh' })
+    await setAct($, { note: tr((await getAct($)).lang, 'ghError') })
     return
   }
   type Found = { repository: { nameWithOwner: string }; number: number; title: string; url: string; isDraft: boolean }
@@ -103,22 +104,23 @@ async function merge($: Engine, pr: Pr) {
   // Merge only what the last refresh listed as ready, re-checked against the same patterns
   const listed = (await getPrs($)).find(p => idOf(p) === id)
   if (!listed || !ready(listed) || !REPO_RE.test(listed.repo) || !Number.isInteger(listed.number)) return
-  await setAct($, { merging: id, note: `Merging ${id}…` })
+  const lang = (await getAct($)).lang
+  await setAct($, { merging: id, note: `${tr(lang, 'merging')} ${id}` })
   const res = await gh($, ['pr', 'merge', String(listed.number), '-R', listed.repo, '--squash', '--delete-branch'], 180_000)
   const reason = (res.stderr || res.stdout).trim().split('\n').pop()?.slice(0, 160) || 'gh error'
-  const note = res.exitCode === 0 ? `Merged ${id}` : `Not merged: ${reason}`
+  const note = res.exitCode === 0 ? tr(lang, 'merged', { id }) : tr(lang, 'notMerged', { r: reason })
   await setAct($, { merging: null, note })
   $.ui.toast(note)
   await refresh($)
 }
 
-function ciLine(pr: Pr): { text: string; color: string } {
-  if (pr.isDraft) return { text: 'Draft', color: 'subtle' }
-  if (!pr.canMerge) return { text: 'Conflicts with the base branch', color: 'error' }
-  if (pr.ci === 'failing') return { text: '✗ Checks failed', color: 'error' }
-  if (pr.ci === 'pending') return { text: '◌ Checks running', color: 'warning' }
-  if (pr.ci === 'passing') return { text: '✓ Checks passed', color: 'success' }
-  return { text: 'No checks', color: 'subtle' }
+function ciLine(pr: Pr, lang: string): { text: string; color: string } {
+  if (pr.isDraft) return { text: tr(lang, 'draft'), color: 'subtle' }
+  if (!pr.canMerge) return { text: tr(lang, 'conflict'), color: 'error' }
+  if (pr.ci === 'failing') return { text: tr(lang, 'failed'), color: 'error' }
+  if (pr.ci === 'pending') return { text: tr(lang, 'running'), color: 'warning' }
+  if (pr.ci === 'passing') return { text: tr(lang, 'passed'), color: 'success' }
+  return { text: tr(lang, 'noChecks'), color: 'subtle' }
 }
 
 // The little companion: a square orange critter with stubby legs and claws.
@@ -150,24 +152,27 @@ export function critterSvg(mood: Mood) {
     `<g>${claws}${legs}<rect x="10" y="14" width="44" height="36" rx="8" fill="${BODY}"/>${eyes}${bob}</g>${zzz}</svg>`
 }
 
-function clockText(ms: number) {
-  if (!ms) return 'not synced yet'
+function clockText(ms: number, lang: string) {
+  if (!ms) return tr(lang, 'notSynced')
   const d = new Date(ms)
   const two = (n: number) => String(n).padStart(2, '0')
-  return `synced ${two(d.getHours())}:${two(d.getMinutes())}`
+  return tr(lang, 'synced', { t: `${two(d.getHours())}:${two(d.getMinutes())}` })
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'merges', description: 'Open the Merges pane: your open pull requests, merged with one press' })
-    void $.ui.open({ id: PANE, title: TITLE })
+    // The chosen language survives restarts; anything unknown in the store falls back to English
+    const saved = await $.store.get(LANG_KEY)
+    await setAct($, { lang: isLang(saved) ? saved : 'en' })
+    void $.ui.open({ id: PANE, title: tr((await getAct($)).lang, 'title') })
     void refresh($)
     $.clock.every(REFRESH_MS, () => void refresh($))
     return next(e)
   })
 
   on('command.run', { command: 'merges' }, async $ => {
-    await $.ui.open({ id: PANE, title: TITLE })
+    await $.ui.open({ id: PANE, title: tr((await getAct($)).lang, 'title') })
     void refresh($)
     return { text: 'Merges pane opened.' }
   })
@@ -177,16 +182,18 @@ export const register: Register = on => {
     const { Box, Text, Button, Link } = ui
     const list = await getPrs($)
     const act = await getAct($)
+    const lang = act.lang
     const readyCount = list.filter(ready).length
     const waiting = list.filter(pr => pr.ci === 'pending').length
     const other = list.length - readyCount - waiting
     const mood: Mood = act.merging ? 'busy' : readyCount ? 'idle' : 'sleepy'
-    const summary = list.length === 0 ? 'nothing to merge'
-      : [readyCount && `${readyCount} ready`, waiting && `${waiting} waiting on checks`, other > 0 && `${other} need attention`]
+    const summary = list.length === 0 ? tr(lang, 'nothing')
+      : [readyCount && tr(lang, 'ready', { n: readyCount }), waiting && tr(lang, 'waiting', { n: waiting }),
+        other > 0 && tr(lang, 'attention', { n: other })]
         .filter(Boolean).join(' · ')
     // Svg exists on the desktop, mobile and editor surfaces; the terminal gets a glyph instead
     const mascot = 'Svg' in ui
-      ? <ui.Svg source={critterSvg(mood)} alt={mood === 'busy' ? 'Merging' : mood === 'idle' ? 'Ready when you are' : 'Asleep: nothing to merge'}
+      ? <ui.Svg source={critterSvg(mood)} alt={mood === 'busy' ? tr(lang, 'merging') : mood === 'idle' ? tr(lang, 'merge') : tr(lang, 'nothing')}
         width={44} height={44} isInteractive />
       : <Text color="claude" bold>✻</Text>
     return (
@@ -195,17 +202,26 @@ export const register: Register = on => {
           <Box flexDirection="row" alignItems="center" gap="sm">
             {mascot}
             <Box flexDirection="column">
-              <Text size="heading" weight="semibold" color="claude">Merges</Text>
-              <Text size="caption" color="subtle">{summary} · {clockText(act.syncedAt)}</Text>
+              <Text size="heading" weight="semibold" color="claude">{tr(lang, 'title')}</Text>
+              <Text size="caption" color="subtle">{summary} · {clockText(act.syncedAt, lang)}</Text>
             </Box>
           </Box>
-          <Button dimColor onPress={() => void refresh($)}>Refresh</Button>
+          <Button dimColor onPress={() => void refresh($)}>{tr(lang, 'refresh')}</Button>
         </Box>
+        {/* Select is drawn on the desktop, terminal and editor; mobile keeps the saved language */}
+        {'Select' in ui ? (
+          <ui.Select key="lang" label={tr(lang, 'language')} options={LANGS} value={lang}
+            onSelect={async code => {
+              if (!isLang(code)) return
+              await setAct($, { lang: code })
+              await $.store.set(LANG_KEY, code)
+            }} />
+        ) : null}
         {act.note ? <Text size="footnote" color={act.merging ? 'warning' : 'text'} wrap="wrap">{act.note}</Text> : null}
-        {list.length === 0 ? <Text color="subtle" wrap="wrap">No open pull requests. All caught up.</Text> : null}
+        {list.length === 0 ? <Text color="subtle" wrap="wrap">{tr(lang, 'empty')}</Text> : null}
         {list.map(pr => {
           const id = idOf(pr)
-          const ci = ciLine(pr)
+          const ci = ciLine(pr, lang)
           return (
             <Box key={id} flexDirection="column" gap="xs" padding="sm" borderStyle="round"
               borderColor={ready(pr) ? 'claude' : 'promptBorder'}>
@@ -214,11 +230,11 @@ export const register: Register = on => {
               <Text size="footnote" color={ci.color}>{ci.text}</Text>
               <Box flexDirection="row" gap="sm" alignItems="center">
                 {act.merging === id ? (
-                  <Text color="warning">Merging…</Text>
+                  <Text color="warning">{tr(lang, 'merging')}</Text>
                 ) : ready(pr) ? (
-                  <Button variant="primary" onPress={() => void merge($, pr)}>Merge</Button>
+                  <Button variant="primary" onPress={() => void merge($, pr)}>{tr(lang, 'merge')}</Button>
                 ) : null}
-                <Link href={pr.url} label="Open on GitHub" />
+                <Link href={pr.url} label={tr(lang, 'open')} />
               </Box>
             </Box>
           )

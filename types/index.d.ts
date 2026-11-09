@@ -9,8 +9,8 @@ export type Pr = {
   canMerge: boolean // GitHub reports it merges without conflicts
 }
 
-// What is happening now: the PR being merged, the last result line, when the list was synced and for whom
-export type Activity = { merging: string | null; note: string; syncedAt: number; owners: string[] }
+// What is happening now: the PR being merged, the last result line, when the list was synced, for whom, and the interface language
+export type Activity = { merging: string | null; note: string; syncedAt: number; owners: string[]; lang: string }
 
 declare module 'claude-code' {
   interface PluginState {
